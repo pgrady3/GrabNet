@@ -31,9 +31,12 @@ class Tester:
         self.logger = logger
 
         use_cuda = torch.cuda.is_available()
+
+        use_cuda = False
         if use_cuda:
             torch.cuda.empty_cache()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")
 
         self.coarse_net = CoarseNet().to(self.device)
         self.refine_net = RefineNet().to(self.device)

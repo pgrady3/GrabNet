@@ -39,11 +39,16 @@ def vis_results(dorig, coarse_net, refine_net, rh_model , save=False, save_dir =
     with torch.no_grad():
         imw, imh = 1920, 780
         cols = len(dorig['bps_object'])
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cpu')
 
         mvs = MeshViewers(window_width=imw, window_height=imh, shape=[1, cols], keepalive=True)
 
         drec_cnet = coarse_net.sample_poses(dorig['bps_object'])
+
+        for k in drec_cnet.keys():
+            print('drec cnet', k, drec_cnet[k].shape)
+
         verts_rh_gen_cnet = rh_model(**drec_cnet).vertices
 
         _, h2o, _ = point2point_signed(verts_rh_gen_cnet, dorig['verts_object'].to(device))
@@ -53,6 +58,8 @@ def vis_results(dorig, coarse_net, refine_net, rh_model , save=False, save_dir =
         drec_cnet['fpose_rhand_rotmat_f'] = aa2rotmat(drec_cnet['hand_pose']).view(-1, 15, 3, 3)
         drec_cnet['verts_object'] = dorig['verts_object'].to(device)
         drec_cnet['h2o_dist']= h2o.abs()
+
+
 
         drec_rnet = refine_net(**drec_cnet)
         verts_rh_gen_rnet = rh_model(**drec_rnet).vertices
@@ -79,7 +86,8 @@ def vis_results(dorig, coarse_net, refine_net, rh_model , save=False, save_dir =
             hand_mesh_gen_rnet.reset_face_normals()
 
             # mvs[0][cId].set_static_meshes([hand_mesh_gen_cnet] + obj_mesh, blocking=True)
-            mvs[0][cId].set_static_meshes([hand_mesh_gen_rnet,obj_mesh], blocking=True)
+            # mvs[0][cId].set_static_meshes([hand_mesh_gen_rnet,obj_mesh], blocking=True)
+            mvs[0][cId].set_static_meshes([hand_mesh_gen_rnet,hand_mesh_gen_cnet,obj_mesh], blocking=True)
 
             if save:
                 save_path = os.path.join(save_dir, str(cId))
@@ -88,7 +96,7 @@ def vis_results(dorig, coarse_net, refine_net, rh_model , save=False, save_dir =
                 obj_mesh[0].write_ply(filename=save_path + '/obj_mesh_%d.ply' % cId)
 
 
-def grab_new_objs(grabnet, objs_path, rot=True, n_samples=10, scale=1.):
+def grab_new_objs(grabnet, objs_path, rot=True, n_samples=5, scale=1.):
     
     grabnet.coarse_net.eval()
     grabnet.refine_net.eval()
@@ -192,7 +200,7 @@ if __name__ == '__main__':
     parser.add_argument('--obj-path', required = True, type=str,
                         help='The path to the 3D object Mesh or Pointcloud')
 
-    parser.add_argument('--rhm-path', required = True, type=str,
+    parser.add_argument('--rhm-path', default='.', type=str,
                         help='The path to the folder containing MANO_RIHGT model')
 
     parser.add_argument('--config-path', default= None, type=str,
@@ -227,4 +235,4 @@ if __name__ == '__main__':
     cfg = Config(default_cfg_path=cfg_path, **config)
 
     grabnet = Tester(cfg=cfg)
-    grab_new_objs(grabnet,obj_path, rot=True, n_samples=10)
+    grab_new_objs(grabnet,obj_path, rot=True, n_samples=5)
