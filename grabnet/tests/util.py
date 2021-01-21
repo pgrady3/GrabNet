@@ -15,37 +15,78 @@ from open3d import utility as o3du
 from open3d import visualization as o3dv
 from manopth.manolayer import ManoLayer
 import trimesh
-# import hand_object
+from grabnet.tools.utils import aa2rotmat, rotmat2aa
+import grabnet.tests.util as util
 
 
-def opt_hand(mano_model, target_verts, hand_pose, hand_trans, hand_rot):
+def convert_pca15_aa45(ho, mano_model_in, mano_model_out):
+    # Helper function to convert the input format. Input format:
+    # mTc is [4,4] rigid transform matrix that encodes large rotations and translation
+    # pose is [18] that encodes rotation in first 3 and PCA 15 with curved hand mean
+    # Output format:
+    # Total rotation in axis angle [3]
+    # Translation
+    # Fully parameterized [45] axis angle representation
+
+    out_dict = {}
+
+    target_verts = torch.Tensor(ho.hand_verts).unsqueeze(0)
+    betas = torch.Tensor(ho.hand_beta).unsqueeze(0)
+
+    rot_mTc = torch.Tensor(ho.hand_mTc).unsqueeze(0)[:, :3, :3]
+    rot_pose_aa = torch.Tensor(ho.hand_pose[:3]).unsqueeze(0).unsqueeze(0).unsqueeze(0)     # Somehow this wants a Bx1x1x3 input
+    rot_pose = aa2rotmat(rot_pose_aa).squeeze(1).squeeze(1).view(-1, 3, 3)
+
+    rot_combined = torch.bmm(rot_mTc, rot_pose)
+    rot_combined_aa = rotmat2aa(rot_combined).squeeze(1).squeeze(1)
+
+    hand_pose_in = torch.Tensor(ho.hand_pose[3:]).unsqueeze(0)  # Get 15-dim pca
+    mano_out = mano_model_in(global_orient=rot_combined_aa, hand_pose=hand_pose_in, betas=betas, return_full_pose=True)
+    hand_pose_out = mano_out.full_pose[:, 3:]     # Get 45-dim full axang representation
+    approx_trans = target_verts[:, 0, :] - mano_out.vertices[:, 0, :]
+
+    out_dict['transl'] = approx_trans
+    out_dict['global_orient'] = rot_combined_aa
+    out_dict['hand_pose'] = hand_pose_out
+    out_dict['betas'] = betas
+
+    # verts_rh_gen_cnet = mano_model_out(**out_dict).vertices
+    # print('Hand fitting err', np.linalg.norm(verts_rh_gen_cnet.squeeze().detach().numpy() - ho.hand_verts, 2, 1).mean())
+
+    return out_dict
+
+
+def opt_hand(mano_model, target_verts, hand_pose, hand_trans, hand_rot, betas=None):
     trans_weight = 1
     # Do optimization
-    hand_pose = torch.Tensor(hand_pose)
-    hand_trans = torch.Tensor(hand_trans) / trans_weight
-    hand_rot = torch.Tensor(hand_rot)
+    hand_pose = torch.Tensor(hand_pose).clone().detach()
+    hand_trans = torch.Tensor(hand_trans).clone().detach() / trans_weight
+    hand_rot = torch.Tensor(hand_rot).clone().detach()
 
     hand_pose.requires_grad = True
-    hand_trans.requires_grad = True
+    # hand_trans.requires_grad = True
     hand_rot.requires_grad = True
 
-    optimizer = torch.optim.Adam([hand_pose, hand_trans, hand_rot], lr=0.005, amsgrad=True)
+    optimizer = torch.optim.Adam([hand_pose, hand_trans, hand_rot], lr=0.1, amsgrad=True)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.1)
     loss_criterion = torch.nn.L1Loss()
 
-    n_iter = 1000
+    n_iter = 600
     for it in range(n_iter):
         optimizer.zero_grad()
-        out_verts = mano_model(global_orient=hand_rot, hand_pose=hand_pose, transl=hand_trans * trans_weight).vertices
+        out_verts = mano_model(global_orient=hand_rot, hand_pose=hand_pose, transl=hand_trans * trans_weight, betas=betas).vertices
         loss = loss_criterion(out_verts, target_verts)
 
-        # if it == n_iter - 1:
-        #     vis_pointcloud(out_verts, target_verts)
-        #     print('Opt loss', loss.detach())
-        # print('Hand trans', hand_trans.detach())
+        if it % 50 == 0:
+            vis_pointcloud(out_verts, target_verts)
+            print('Opt loss', loss.detach())
+        print('Hand trans', hand_trans.detach())
 
         loss.backward()
         optimizer.step()
-    # print('Final loss', loss.detach().data)
+        scheduler.step()
+        # print(loss.item())
+    print('Final loss', loss.detach().data)
     # print('Final trans', hand_trans)
 
     return hand_pose.detach(), hand_trans.detach() * trans_weight, hand_rot.detach()
