@@ -35,12 +35,14 @@ from torch.utils.data import DataLoader
 from pytorch3d.structures import Meshes
 from tensorboardX import SummaryWriter
 
+from grabnet.tests.loader import ContactDBDataset
+from grabnet.tools.utils import aa2rotmat, rotmat2aa
+
 
 class Trainer:
 
-    def __init__(self,cfg, inference=False):
+    def __init__(self, cfg, inference=False):
 
-        
         self.dtype = torch.float32
 
         torch.manual_seed(cfg.seed)
@@ -69,11 +71,8 @@ class Trainer:
         if use_cuda:
             logger('Using %d CUDA cores [%s] for training!' % (gpu_count, gpu_brand))
 
-
-
         self.data_info = {}
         self.load_data(cfg, inference)
-
 
         with torch.no_grad():
             self.rhm_train = mano.load(model_path=cfg.rhm_path,
@@ -133,47 +132,41 @@ class Trainer:
         self.v_weights = v_weights
         self.v_weights2 = v_weights2
 
-        self.w_dist = torch.ones([self.cfg.batch_size,self.n_obj_verts]).to(self.device)
+        # self.w_dist = torch.ones([self.cfg.batch_size,self.n_obj_verts]).to(self.device)
         self.contact_v = v_weights > 0.8
 
-
-    def load_data(self,cfg, inference):
+    def load_data(self, cfg, inference):
 
         kwargs = {'num_workers': cfg.n_workers,
-                  'batch_size':cfg.batch_size,
-                  'shuffle':True,
-                  'drop_last':True
+                  'batch_size': cfg.batch_size,
+                  'shuffle': True,
+                  'drop_last': True
                   }
 
         ds_name = 'test'
         self.data_info[ds_name] = {}
-        ds_test = LoadData(dataset_dir=cfg.dataset_dir, ds_name=ds_name)
-        self.data_info[ds_name]['frame_names'] = ds_test.frame_names
-        self.data_info[ds_name]['frame_sbjs'] = ds_test.frame_sbjs
-        self.ds_test = DataLoader(ds_test, batch_size=cfg.batch_size, shuffle=True, drop_last=True)
+        # ds_test = LoadData(dataset_dir=cfg.dataset_dir, ds_name=ds_name)
+        ds_test = ContactDBDataset(cfg.test_dataset_dir, train=False)
+        self.ds_test = DataLoader(ds_test, batch_size=cfg.batch_size, shuffle=True, drop_last=True, collate_fn=ContactDBDataset.collate_fn)
 
         if not inference:
             ds_name = 'train'
             self.data_info[ds_name] = {}
-            ds_train = LoadData(dataset_dir=cfg.dataset_dir, ds_name=ds_name, load_on_ram=cfg.load_on_ram)
-            self.data_info[ds_name]['frame_names'] = ds_train.frame_names
-            self.data_info[ds_name]['frame_sbjs'] = ds_train.frame_sbjs
-            self.data_info['hand_vtmp'] = ds_train.sbj_vtemp
-            self.data_info['hand_betas'] = ds_train.sbj_betas
-            self.ds_train = DataLoader(ds_train, **kwargs)
+            # ds_train = LoadData(dataset_dir=cfg.dataset_dir, ds_name=ds_name, load_on_ram=cfg.load_on_ram)
+
+            ds_train = ContactDBDataset(cfg.train_dataset_dir, train=True)
+            self.ds_train = DataLoader(ds_train, collate_fn=ContactDBDataset.collate_fn, **kwargs)
 
             ds_name = 'val'
             self.data_info[ds_name] = {}
-            ds_val = LoadData(dataset_dir=cfg.dataset_dir, ds_name=ds_name, load_on_ram=cfg.load_on_ram)
-            self.data_info[ds_name]['frame_names'] = ds_val.frame_names
-            self.data_info[ds_name]['frame_sbjs'] = ds_val.frame_sbjs
-            self.ds_val = DataLoader(ds_val, **kwargs)
+            # ds_val = LoadData(dataset_dir=cfg.dataset_dir, ds_name=ds_name, load_on_ram=cfg.load_on_ram)
+            ds_val = ContactDBDataset(cfg.test_dataset_dir, train=False)
+            self.ds_val = DataLoader(ds_val, collate_fn=ContactDBDataset.collate_fn, **kwargs)
 
             self.logger('Dataset Train, Vald, Test size respectively: %.2f M, %.2f K, %.2f K' %
                    (len(self.ds_train.dataset) * 1e-6, len(self.ds_val.dataset) * 1e-3, len(self.ds_test.dataset) * 1e-3))
 
-        self.bps = ds_test.bps
-        self.n_obj_verts = ds_test[0]['verts_object'].shape[0]
+        # self.n_obj_verts = ds_test[0]['verts_object'].shape[0]
 
     def edges_for(self, x, vpe):
         return (x[:, vpe[:, 0]] - x[:, vpe[:, 1]])
@@ -234,10 +227,17 @@ class Trainer:
 
             if self.fit_rnet:
 
-                params_rnet = self.params_rnet(dorig)
+                params_rnet = self.params_rnet(dorig)   # Get the distances from hand to object and such
                 dorig.update(params_rnet)
 
-                drec_rnet = self.refine_net(**dorig)
+                global_orient_rhand_rotmat_f = aa2rotmat(dorig['hand_rot_aug']).view(-1, 3, 3)
+                fpose_rhand_rotmat_f = aa2rotmat(dorig['hand_pose_45_aug']).view(-1, 15, 3, 3)
+
+                drec_rnet = self.refine_net(h2o_dist=dorig['h2o_dist'],
+                                            fpose_rhand_rotmat_f=fpose_rhand_rotmat_f,
+                                            trans_rhand_f=dorig['hand_trans_aug'].squeeze(1),
+                                            global_orient_rhand_rotmat_f=global_orient_rhand_rotmat_f,
+                                            verts_object=dorig['obj_sampled_verts_gt'])    # Data, result?
                 loss_total_rnet, cur_loss_dict_rnet = self.loss_rnet(dorig, drec_rnet)
 
                 loss_total_rnet.backward()
@@ -287,7 +287,16 @@ class Trainer:
                     params_rnet = self.params_rnet(dorig)
                     dorig.update(params_rnet)
 
-                    drec_rnet = self.refine_net(**dorig)
+                    global_orient_rhand_rotmat_f = aa2rotmat(dorig['hand_rot_aug']).view(-1, 3, 3)
+                    fpose_rhand_rotmat_f = aa2rotmat(dorig['hand_pose_45_aug']).view(-1, 15, 3, 3)
+
+                    drec_rnet = self.refine_net(h2o_dist=dorig['h2o_dist'],
+                                                fpose_rhand_rotmat_f=fpose_rhand_rotmat_f,
+                                                trans_rhand_f=dorig['hand_trans_aug'].squeeze(1),
+                                                global_orient_rhand_rotmat_f=global_orient_rhand_rotmat_f,
+                                                verts_object=dorig['obj_sampled_verts_gt'])  # Data, result?
+
+                    # drec_rnet = self.refine_net(**dorig)
                     loss_total_rnet, cur_loss_dict_rnet = self.loss_rnet(dorig, drec_rnet)
 
                     eval_loss_dict_rnet = {k: eval_loss_dict_rnet.get(k, 0.0) + v.item() for k, v in cur_loss_dict_rnet.items()}
@@ -298,11 +307,11 @@ class Trainer:
         return eval_loss_dict_cnet, eval_loss_dict_rnet
 
     def params_rnet(self,dorig):
-        rh_mesh = Meshes(verts=dorig['verts_rhand_f'], faces=self.rh_f).to(self.device).verts_normals_packed().view(-1, 778, 3)
-        rh_mesh_gt = Meshes(verts=dorig['verts_rhand'], faces=self.rh_f).to(self.device).verts_normals_packed().view(-1, 778, 3)
+        rh_mesh = Meshes(verts=dorig['hand_verts_aug'], faces=self.rh_f).to(self.device).verts_normals_packed().view(-1, 778, 3)
+        rh_mesh_gt = Meshes(verts=dorig['hand_verts_gt'], faces=self.rh_f).to(self.device).verts_normals_packed().view(-1, 778, 3)
 
-        o2h_signed, h2o, _ = point2point_signed(dorig['verts_rhand_f'], dorig['verts_object'], rh_mesh)
-        o2h_signed_gt, h2o_gt, _ = point2point_signed(dorig['verts_rhand'], dorig['verts_object'], rh_mesh_gt)
+        o2h_signed, h2o, _ = point2point_signed(dorig['hand_verts_aug'], dorig['obj_sampled_verts_gt'], rh_mesh)
+        o2h_signed_gt, h2o_gt, _ = point2point_signed(dorig['hand_verts_gt'], dorig['obj_sampled_verts_gt'], rh_mesh_gt)
 
         h2o = h2o.abs()
         h2o_gt = h2o_gt.abs()
@@ -316,13 +325,13 @@ class Trainer:
 
         rh_mesh = Meshes(verts=verts_rhand, faces=self.rh_f).to(self.device).verts_normals_packed().view(-1, 778, 3)
         h2o_gt = dorig['h2o_gt']
-        o2h_signed, h2o, _ = point2point_signed(verts_rhand, dorig['verts_object'], rh_mesh)
+        o2h_signed, h2o, _ = point2point_signed(verts_rhand, dorig['obj_sampled_verts_gt'], rh_mesh)
         ######### dist loss
         loss_dist_h = 35 * (1. - self.cfg.kl_coef) * torch.mean(torch.einsum('ij,j->ij', torch.abs(h2o.abs() - h2o_gt.abs()), self.v_weights2))
         ########## verts loss
-        loss_mesh_rec_w = 20 * (1. - self.cfg.kl_coef) * torch.mean(torch.einsum('ijk,j->ijk', torch.abs((dorig['verts_rhand'] - verts_rhand)), self.v_weights2))
+        loss_mesh_rec_w = 20 * (1. - self.cfg.kl_coef) * torch.mean(torch.einsum('ijk,j->ijk', torch.abs((dorig['hand_verts_gt'] - verts_rhand)), self.v_weights2))
         ########## edge loss
-        loss_edge = 10 * (1. - self.cfg.kl_coef) * self.LossL1(self.edges_for(verts_rhand, self.vpe), self.edges_for(dorig['verts_rhand'], self.vpe))
+        loss_edge = 10 * (1. - self.cfg.kl_coef) * self.LossL1(self.edges_for(verts_rhand, self.vpe), self.edges_for(dorig['hand_verts_gt'], self.vpe))
         ##########
 
         loss_dict = {
@@ -396,7 +405,7 @@ class Trainer:
 
         prev_lr_cnet = np.inf
         prev_lr_rnet = np.inf
-        self.fit_cnet = True
+        self.fit_cnet = False
         self.fit_rnet = True
 
         lr_scheduler_cnet = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer_cnet, 'min')

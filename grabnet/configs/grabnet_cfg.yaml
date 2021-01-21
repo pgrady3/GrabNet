@@ -9,10 +9,10 @@ dataset_dir: null
 expr_ID: V00
 kl_coef: 0.005
 latentD: 16
-log_every_epoch: 2
+log_every_epoch: 6
 n_epochs: 500
 n_neurons: 512
-n_workers: 10
+n_workers: 6
 reg_coef: 0.0005
 rhm_path: null
 seed: 4815

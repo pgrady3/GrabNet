@@ -30,20 +30,21 @@ def convert_pca15_aa45(ho, mano_model_in, mano_model_out):
 
     out_dict = {}
 
-    target_verts = torch.Tensor(ho.hand_verts).unsqueeze(0)
-    betas = torch.Tensor(ho.hand_beta).unsqueeze(0)
+    with torch.no_grad():
+        target_verts = torch.Tensor(ho.hand_verts).unsqueeze(0)
+        betas = torch.Tensor(ho.hand_beta).unsqueeze(0)
 
-    rot_mTc = torch.Tensor(ho.hand_mTc).unsqueeze(0)[:, :3, :3]
-    rot_pose_aa = torch.Tensor(ho.hand_pose[:3]).unsqueeze(0).unsqueeze(0).unsqueeze(0)     # Somehow this wants a Bx1x1x3 input
-    rot_pose = aa2rotmat(rot_pose_aa).squeeze(1).squeeze(1).view(-1, 3, 3)
+        rot_mTc = torch.Tensor(ho.hand_mTc).unsqueeze(0)[:, :3, :3]
+        rot_pose_aa = torch.Tensor(ho.hand_pose[:3]).unsqueeze(0).unsqueeze(0).unsqueeze(0)     # Somehow this wants a Bx1x1x3 input
+        rot_pose = aa2rotmat(rot_pose_aa).squeeze(1).squeeze(1).view(-1, 3, 3)
 
-    rot_combined = torch.bmm(rot_mTc, rot_pose)
-    rot_combined_aa = rotmat2aa(rot_combined).squeeze(1).squeeze(1)
+        rot_combined = torch.bmm(rot_mTc, rot_pose)
+        rot_combined_aa = rotmat2aa(rot_combined).squeeze(1).squeeze(1)
 
-    hand_pose_in = torch.Tensor(ho.hand_pose[3:]).unsqueeze(0)  # Get 15-dim pca
-    mano_out = mano_model_in(global_orient=rot_combined_aa, hand_pose=hand_pose_in, betas=betas, return_full_pose=True)
-    hand_pose_out = mano_out.full_pose[:, 3:]     # Get 45-dim full axang representation
-    approx_trans = target_verts[:, 0, :] - mano_out.vertices[:, 0, :]
+        hand_pose_in = torch.Tensor(ho.hand_pose[3:]).unsqueeze(0)  # Get 15-dim pca
+        mano_out = mano_model_in(global_orient=rot_combined_aa, hand_pose=hand_pose_in, betas=betas, return_full_pose=True)
+        hand_pose_out = mano_out.full_pose[:, 3:]     # Get 45-dim full axang representation
+        approx_trans = target_verts[:, 0, :] - mano_out.vertices[:, 0, :]
 
     out_dict['transl'] = approx_trans
     out_dict['global_orient'] = rot_combined_aa

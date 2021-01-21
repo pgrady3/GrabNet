@@ -26,8 +26,8 @@ if __name__ == '__main__':
     parser.add_argument('--work-dir', required=True, type=str,
                         help='The path to the downloaded grab data')
 
-    parser.add_argument('--data-path', required=True, type=str,
-                        help='The path to the folder that contains GrabNet data')
+    # parser.add_argument('--data-path', required=True, type=str,
+    #                     help='The path to the folder that contains GrabNet data')
 
     parser.add_argument('--rhm-path', required=True, type=str,
                         help='The path to the folder containing MANO_RIHGT model')
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     work_dir = args.work_dir
-    data_path = args.data_path
+    # data_path = args.data_path
     rhm_path = args.rhm_path
     expr_ID = args.expr_ID
     batch_size = args.batch_size
@@ -70,31 +70,25 @@ if __name__ == '__main__':
     kl_coef = args.kl_coef
     load_on_ram = args.load_on_ram
 
-
     cwd = os.getcwd()
     default_cfg_path = 'grabnet/configs/grabnet_cfg.yaml'
     vpe_path = 'grabnet/configs/verts_per_edge.npy'
     c_weights_path = 'grabnet/configs/rhand_weight.npy'
 
-
     cfg = {
         'batch_size': batch_size,
         'n_workers': n_workers,
-
-        'use_multigpu':multi_gpu,
-
+        'use_multigpu': multi_gpu,
         'kl_coef': kl_coef,
-
-        'dataset_dir': data_path,
+        'train_dataset_dir': '/home/patrick/pose/align_hands/dataset_local/train.pkl',
+        # 'train_dataset_dir': '/home/patrick/pose/align_hands/dataset/test.pkl',
+        'test_dataset_dir': '/home/patrick/pose/align_hands/dataset_local/test.pkl',
         'rhm_path': rhm_path,
         'vpe_path': vpe_path,
         'c_weights_path': c_weights_path,
-
         'expr_ID': expr_ID,
         'work_dir': work_dir,
-
         'base_lr': base_lr,
-
         'best_cnet': None,
         'best_rnet': None,
         'load_on_ram': load_on_ram
